@@ -174,7 +174,7 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
         <label>Confiança mínima para dar OK (%)<input type="number" id="minconf" min="50" max="99" value="90"></label>
         <label class="check"><input type="checkbox" id="sound" checked>Som e vibração no resultado</label>
         <p class="note">Com prefixo preenchido, uma leitura que não comece com ele aparece como "Conferir", o que ajuda a pegar leitura errada ou frasco de outro molde. Se a leitura não achar um número com a quantidade de dígitos definida, o resultado é "Não lido": o app nunca dá OK sem ler o número.</p>
-        <p class="note">No plástico translúcido o começo do código (molde) costuma sair apagado. O app completa esse começo pelo prefixo do molde, desde que os últimos 3 dígitos (cavidade) sejam lidos com segurança. Se o prefixo estiver vazio, ele usa o começo comum das cavidades reprovadas cadastradas.</p>
+        <p class="note">No plástico translúcido o começo do código (molde) costuma sair apagado. O app completa esse começo pelo prefixo do molde, desde que os últimos 3 dígitos (cavidade) sejam lidos com segurança. Se o prefixo estiver vazio, ele usa o começo comum das cavidades reprovadas cadastradas. Um número a um dígito de uma reprovada (ex.: 013 e 012) precisa de uma leitura a mais antes de dar OK.</p>
       </div>
     </details>
   </section>
@@ -272,14 +272,19 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
     let p = b[0]; for(const x of b) while(p && !x.startsWith(p)) p = p.slice(0, -1);
     return p.slice(0, Math.max(0, N - 3));
   }
-  // Se o final do número (cavidade) foi lido e o começo bate com o molde (no máximo 1 dígito diferente), completa com o molde.
+  // Se o final do número (cavidade) foi lido e o começo bate com o molde, completa com o molde.
+  // Os 2 dígitos do molde colados na cavidade precisam bater exatamente (garante que nenhum dígito sumiu ou sobrou);
+  // nos demais aceita até metade diferente, porque o molde é igual em todos os frascos.
   function fixByPrefix(run){
     const N = cfg.digits, MP = moldPrefix(), sl = N - MP.length;
-    if(!MP || run.length < sl + 2 || run.length > N + 3) return null;
+    if(!MP || run.length < sl + 3 || run.length > N + 3) return null;
     const pre = run.slice(0, -sl), k = Math.min(pre.length, MP.length), a = pre.slice(-k), b = MP.slice(-k);
-    let mm = 0; for(let i=0;i<k;i++) if(a[i] !== b[i]) mm++;
-    return mm <= (k >= 4 ? 1 : 0) ? { num: MP + run.slice(-sl), sl, mm } : null;
+    if(a.slice(-2) !== b.slice(-2)) return null;
+    let mm = 0; for(let i=0;i<k-2;i++) if(a[i] !== b[i]) mm++;
+    return mm <= Math.floor((k - 2) / 2) ? { num: MP + run.slice(-sl), sl, mm } : null;
   }
+  // Número a um dígito de uma cavidade reprovada (ex.: 032 x 012): exige leitura mais segura antes de dar OK
+  function nearBad(num){ return bad.find(b => b.length === num.length && [...b].filter((ch, i) => ch !== num[i]).length === 1) || null; }
   // Sequências de dígitos de uma linha, com a confiança de cada dígito (espaço, ponto e hífen são ignorados)
   function runsOf(l){
     const t = l.text, cc = l.cc || [], out = []; let s = '', c = [];
@@ -295,7 +300,7 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
 
   // Analisa as linhas lidas. Retorna {kind:'bad'|'ok'|'warn'|'none', num, conf, msg}
   function pick(lines, source){
-    const N = cfg.digits, P = cfg.prefix, MP = source === 'manual' ? '' : moldPrefix();
+    const N = cfg.digits, P = cfg.prefix, MP = source === 'manual' ? '' : moldPrefix(), CL = MP ? N - MP.length : 3;
     const avg = a => a.length ? a.reduce((x,y)=>x+y,0) / a.length : 0;
     const wins = [];
     lines.forEach(l => runsOf(l).forEach(({s: run, c}) => {
@@ -310,7 +315,9 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
         const f = fixByPrefix(run);
         if(f){ primary = f.num; all.push(f.num); conf = avg(c.slice(-f.sl)); fixed = f.mm > 0 || run.length < N; }
       }
-      if(all.length) wins.push({all, primary, conf, raw: run, fixed});
+      // confiança do pior dígito da cavidade (os últimos dígitos, que decidem OK/Reprovado)
+      const minCav = primary ? Math.min(...c.slice(-CL)) : 0;
+      if(all.length) wins.push({all, primary, conf, minCav, raw: run, fixed});
     }));
     if(!wins.length) return {kind:'none', msg: source === 'manual' ? 'O número precisa ter '+N+' dígitos.' : 'Não encontrei um número de '+N+' dígitos. Aproxime, deixe o número reto e evite reflexo forte.'};
     for(const w of wins){ const hit = w.all.find(n => bad.includes(n)); if(hit) return {kind:'bad', num: hit, conf: w.conf, msg:'Cavidade da lista de reprovadas. Separe este frasco.'}; }
@@ -318,11 +325,15 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
     const uniq = [...new Set(good.map(w => w.primary))];
     if(!uniq.length) return {kind:'warn', num: wins[0].raw, conf: wins[0].conf, msg:'Li '+wins[0].raw+', que não começa com '+P+'. Confira visualmente.'};
     if(uniq.length > 1) return {kind:'warn', num: uniq.join(' / '), conf: 0, msg:'Li mais de um número. Mostre só um frasco por vez.'};
-    const num = uniq[0], mine = good.filter(w => w.primary === num), conf = Math.max(...mine.map(w => w.conf));
+    const num = uniq[0], mine = good.filter(w => w.primary === num);
+    const conf = Math.max(...mine.map(w => w.conf)), minCav = Math.max(...mine.map(w => w.minCav));
     const note = mine.every(w => w.fixed) ? ' Início completado pelo prefixo do molde.' : '';
-    if(P && !num.startsWith(P)) return {kind:'warn', num, conf, msg:'O número lido não começa com '+P+'. Confira visualmente.'};
-    if(conf*100 < cfg.minconf) return {kind:'warn', num, conf, lowconf: true, msg:'Leitura com confiança de '+Math.round(conf*100)+'%. Confira o número no frasco.'+note};
-    return {kind:'ok', num, conf, msg:'Cavidade fora da lista de reprovadas. Confiança: '+Math.round(conf*100)+'%.'+note};
+    const mold = P || MP;
+    if(mold && !num.startsWith(mold)) return {kind:'warn', num, conf, msg:'O número lido não começa com '+mold+' (molde). Confira visualmente.'};
+    if(conf*100 < cfg.minconf || minCav < 0.8) return {kind:'warn', num, conf, lowconf: true, msg:'Leitura com confiança de '+Math.round(Math.min(conf, minCav)*100)+'% na cavidade. Confira o número no frasco.'+note};
+    const nb = source === 'manual' ? null : nearBad(num);
+    if(nb && minCav < 0.97) return {kind:'warn', num, conf, lowconf: true, near: true, msg:'Número parecido com a cavidade reprovada '+nb+'. Confira no frasco.'};
+    return {kind:'ok', num, conf, near: !!nb, msg:'Cavidade fora da lista de reprovadas. Confiança: '+Math.round(Math.min(conf, minCav)*100)+'%.'+note};
   }
   function apply(r){
     const V = {bad:'Reprovado', ok:'OK', warn:'Conferir', none:'Não lido'}[r.kind];
@@ -373,7 +384,7 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
       $('engineTxt').textContent = 'Preparando leitor…';
       detS = await ort.InferenceSession.create(detB, { executionProviders: ['wasm'] });
       recS = await ort.InferenceSession.create(recB, { executionProviders: ['wasm'] });
-      $('dot').className = 'dot ready'; $('engineTxt').textContent = 'Leitor pronto (offline) · v3';
+      $('dot').className = 'dot ready'; $('engineTxt').textContent = 'Leitor pronto (offline) · v4';
       $('shootBtn').disabled = false;
       return true;
     }catch(err){
@@ -658,8 +669,9 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
     setTimeout(loop, 60);
   }
 
-  // Decide pelo que se repete nas últimas leituras (não precisa ser seguido): 2 iguais para OK/Reprovado,
-  // ou 3 iguais quando cada uma sozinha ficou abaixo da confiança mínima.
+  // Decide pelo que se repete nas últimas leituras (não precisa ser seguido).
+  // Reprovado: 2 leituras iguais. OK: 2 iguais, e mais 1 para cada motivo de dúvida (número parecido com
+  // uma reprovada, ou alguma leitura de reprovada no meio). Leituras com confiança baixa contam, mas pedem 1 a mais.
   let recent = [];
   function step(r){
     const now = performance.now();
@@ -670,14 +682,16 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
     }
     noneCount = 0;
     if(!presentSince) presentSince = now;
-    recent.push(r); if(recent.length > 5) recent.shift();
+    recent.push(r); if(recent.length > 6) recent.shift();
     const cnt = (num, f) => recent.filter(x => x.num === num && f(x)).length;
+    const strong = x => x.kind === 'ok';
     const weak = x => x.kind === 'ok' || (x.lowconf && x.conf >= 0.6);
     let dec = recent.find(x => x.kind === 'bad' && cnt(x.num, y => y.kind === 'bad') >= 2) || null;
-    if(!dec && r.kind === 'ok' && cnt(r.num, y => y.kind === 'ok') >= 2) dec = r;
-    if(!dec && weak(r)){
-      const n = cnt(r.num, weak);
-      if(n >= 3) dec = Object.assign({}, r, {kind:'ok', msg:'Cavidade fora da lista de reprovadas. Mesmo número em '+n+' leituras.'});
+    if(!dec && (r.kind === 'ok' || r.lowconf)){
+      const need = 2 + (nearBad(r.num) ? 1 : 0) + (recent.some(x => x.kind === 'bad') ? 1 : 0);
+      const ns = cnt(r.num, strong), nw = cnt(r.num, weak);
+      if(ns >= need) dec = recent.filter(x => x.num === r.num && strong(x)).pop();
+      else if(nw >= need + 1) dec = Object.assign({}, r, {kind:'ok', msg:'Cavidade fora da lista de reprovadas. Mesmo número em '+nw+' leituras.'});
     }
     if(dec){
       if(!armed && dec.num === lastJudged) return;
