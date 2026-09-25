@@ -1,0 +1,23 @@
+LEITOR DE CAVIDADES - GLOBALPACK (modo vídeo)
+
+Leitura 100% no celular, sem custo e sem servidor da empresa.
+
+PUBLICAR (uma vez, pelo computador, cerca de 3 minutos)
+1. Descompacte o arquivo .zip. Vai aparecer a pasta "leitor-cavidades".
+2. Abra https://app.netlify.com/drop no navegador do computador.
+3. Arraste a pasta "leitor-cavidades" para a área indicada na página.
+4. Crie a conta gratuita quando o site pedir (pode entrar com e-mail ou Google).
+   Sem a conta, o link expira.
+5. Copie o link gerado (algo como https://nome-aleatorio.netlify.app).
+   Em "Site configuration > Change site name", dá para trocar o nome,
+   por exemplo para leitor-cavidades-gp.
+
+USAR NO CELULAR
+1. Abra o link no Chrome (Android) ou no Safari (iPhone) e permita a câmera.
+2. Na primeira abertura, o leitor baixa cerca de 25 MB e fica guardado no celular.
+3. Crie o atalho: menu > Adicionar à tela inicial.
+4. Cadastre as cavidades reprovadas e passe os frascos na moldura.
+   O resultado aparece sozinho: OK (verde), REPROVADO (vermelho) ou CONFERIR (amarelo).
+
+ATUALIZAR
+No painel do Netlify, entre no site, vá em "Deploys" e arraste a nova pasta.

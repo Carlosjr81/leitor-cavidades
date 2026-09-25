@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#1f5f8b">
+<title>Leitor de Cavidades</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<style>
+:root{
+  --bg:#eef1f3; --panel:#ffffff; --ink:#15212b; --muted:#5b6b78; --line:#d3dae0;
+  --accent:#1f5f8b; --accent-ink:#ffffff; --field:#f6f8f9;
+  --ok:#128a4a; --ok-bg:#e3f5ea; --bad:#c62828; --bad-bg:#fde7e7; --warn:#b26a00; --warn-bg:#fff3dc;
+  --idle-bg:#e6ecf0;
+  --display:"Barlow Condensed","Arial Narrow",Arial,sans-serif;
+  --body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#0f161c; --panel:#18222a; --ink:#e6edf2; --muted:#93a3b0; --line:#2b3843;
+    --accent:#5aa6d6; --accent-ink:#06131c; --field:#121b22;
+    --ok:#3fcf7f; --ok-bg:#12301f; --bad:#ff6b6b; --bad-bg:#3a1515; --warn:#ffb940; --warn-bg:#35270b;
+    --idle-bg:#1d2a33;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0f161c; --panel:#18222a; --ink:#e6edf2; --muted:#93a3b0; --line:#2b3843;
+  --accent:#5aa6d6; --accent-ink:#06131c; --field:#121b22;
+  --ok:#3fcf7f; --ok-bg:#12301f; --bad:#ff6b6b; --bad-bg:#3a1515; --warn:#ffb940; --warn-bg:#35270b;
+  --idle-bg:#1d2a33;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:15px/1.45 var(--body);padding-inline:16px;padding-block:14px 40px}
+.wrap{max-width:560px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+h1{font:800 26px/1 var(--display);letter-spacing:.02em;text-transform:uppercase;margin:0}
+h1 span{color:var(--accent)}
+.engine{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--warn)}
+.dot.ready{background:var(--ok)}.dot.err{background:var(--bad)}
+
+.status{border-radius:14px;padding:22px 18px;text-align:center;display:flex;flex-direction:column;gap:6px;align-items:center;background:var(--idle-bg);border:2px solid transparent;transition:background .15s}
+.status .verdict{font:800 clamp(44px,14vw,72px)/.95 var(--display);letter-spacing:.03em;text-transform:uppercase}
+.status .num{font:600 clamp(24px,7vw,32px)/1.1 var(--mono);letter-spacing:.06em;font-variant-numeric:tabular-nums}
+.status .hint{font-size:13px;color:var(--muted);max-width:40ch}
+.status.ok{background:var(--ok-bg);border-color:var(--ok)}.status.ok .verdict{color:var(--ok)}
+.status.bad{background:var(--bad-bg);border-color:var(--bad)}.status.bad .verdict{color:var(--bad)}
+.status.warn{background:var(--warn-bg);border-color:var(--warn)}.status.warn .verdict{color:var(--warn)}
+.status.busy .verdict{color:var(--accent)}
+.status.idle .verdict{color:var(--muted);font-size:clamp(34px,10vw,48px)}
+.thumb{max-width:100%;max-height:120px;border-radius:8px;border:1px solid var(--line)}
+
+.shoot{display:block;width:100%;border:0;border-radius:14px;background:var(--accent);color:var(--accent-ink);font:700 24px/1 var(--display);letter-spacing:.06em;text-transform:uppercase;padding:22px 16px;cursor:pointer}
+.shoot:disabled{opacity:.5;cursor:wait}
+.shoot:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.row{display:flex;gap:8px}
+.row input{flex:1;min-width:0}
+input[type=text],input[type=number],textarea,select{font:500 16px var(--mono);color:var(--ink);background:var(--field);border:1px solid var(--line);border-radius:10px;padding:11px 12px;width:100%}
+textarea{resize:vertical;min-height:64px}
+.btn{font:600 14px var(--body);border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:10px;padding:10px 14px;cursor:pointer;white-space:nowrap}
+.btn.primary{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.card h2{font:700 15px/1 var(--display);letter-spacing:.1em;text-transform:uppercase;margin:0;color:var(--muted);display:flex;justify-content:space-between;align-items:center;gap:8px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{display:inline-flex;align-items:center;gap:8px;background:var(--bad-bg);color:var(--bad);border:1px solid var(--bad);border-radius:999px;padding:6px 6px 6px 12px;font:600 15px var(--mono);font-variant-numeric:tabular-nums}
+.chip button{border:0;background:transparent;color:inherit;font:600 16px var(--body);width:26px;height:26px;border-radius:50%;cursor:pointer}
+.empty{color:var(--muted);font-size:13px}
+
+.counts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.count{background:var(--field);border-radius:10px;padding:10px;text-align:center}
+.count b{display:block;font:700 26px/1 var(--display);font-variant-numeric:tabular-nums}
+.count small{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.count.ok b{color:var(--ok)}.count.bad b{color:var(--bad)}
+
+.hist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;max-height:260px;overflow:auto}
+.hist li{display:grid;grid-template-columns:52px 1fr auto;gap:10px;align-items:center;padding:8px 2px;border-top:1px solid var(--line);font-size:13px}
+.hist li:first-child{border-top:0}
+.hist time{color:var(--muted);font-variant-numeric:tabular-nums}
+.hist .n{font:600 14px var(--mono);font-variant-numeric:tabular-nums}
+.tag{font:700 12px var(--display);letter-spacing:.08em;text-transform:uppercase;padding:3px 8px;border-radius:6px}
+.tag.ok{background:var(--ok-bg);color:var(--ok)}.tag.bad{background:var(--bad-bg);color:var(--bad)}.tag.warn{background:var(--warn-bg);color:var(--warn)}
+
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+label{font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px}
+.check{flex-direction:row;align-items:center;gap:8px;font-size:14px;color:var(--ink)}
+.check input{width:20px;height:20px}
+details summary{cursor:pointer;font:700 15px/1 var(--display);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);list-style:none}
+details summary::-webkit-details-marker{display:none}
+details summary::after{content:" +"}
+details[open] summary::after{content:" –"}
+details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:12px}
+.note{font-size:12px;color:var(--muted);margin:0}
+.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+.cam{position:relative;border-radius:14px;overflow:hidden;background:#000;aspect-ratio:3/4;max-width:100%;max-height:52vh;width:100%;border:4px solid transparent}
+.cam video{width:100%;height:100%;object-fit:cover;display:block}
+.cam .frame{position:absolute;left:5%;right:5%;top:36%;height:28%;border:3px solid #fff;border-radius:10px;box-shadow:0 0 0 999px rgba(0,0,0,.35)}
+.cam .frame span{position:absolute;top:-24px;left:0;right:0;text-align:center;color:#fff;font:600 13px var(--body);text-shadow:0 1px 3px #000}
+.cam.ok{border-color:var(--ok)}.cam.ok .frame{border-color:var(--ok)}
+.cam.bad{border-color:var(--bad)}.cam.bad .frame{border-color:var(--bad)}
+.cam.warn{border-color:var(--warn)}.cam.warn .frame{border-color:var(--warn)}
+.camtools{display:flex;gap:8px;align-items:center}
+.camtools .btn{flex:0 0 auto}.camtools small{flex:1;color:var(--muted);font-size:12px}
+.btn.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+[hidden]{display:none!important}.vbadge{position:absolute;left:0;right:0;bottom:0;padding:10px;text-align:center;font:800 34px/1 var(--display);letter-spacing:.04em;text-transform:uppercase;color:#fff;background:rgba(0,0,0,.45)}.vbadge.ok{background:var(--ok)}.vbadge.bad{background:var(--bad)}.vbadge.warn{background:var(--warn)}</style>
+
+<style>html{color-scheme:light}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+</head><body>
+<div class="wrap">
+  <header>
+    <h1>Leitor de <span>Cavidades</span></h1>
+    <div class="engine"><span class="dot" id="dot"></span><span id="engineTxt">Carregando leitor…</span></div>
+  </header>
+
+  <section id="liveBox" hidden style="display:flex;flex-direction:column;gap:8px">
+    <div class="cam" id="camBox">
+      <video id="video" playsinline muted autoplay></video>
+      <div class="frame" id="guide"><span>Encaixe o número aqui</span></div>
+      <div class="vbadge" id="vbadge">Aguardando frasco</div>
+    </div>
+    <div class="camtools"><small id="liveInfo">Lendo ao vivo</small><button class="btn" id="torchBtn" hidden>Lanterna</button><button class="btn" id="pauseBtn">Pausar</button></div>
+  </section>
+
+  <section class="status idle" id="status" aria-live="assertive">
+    <div class="verdict" id="verdict">Pronto</div>
+    <div class="num" id="readNum">— — —</div>
+    <img class="thumb" id="thumb" alt="Última foto lida" hidden>
+    <div class="hint" id="hint">Fotografe o fundo do frasco com o número reto e legível. A leitura é feita no próprio celular.</div>
+  </section>
+
+  <input type="file" id="cam" accept="image/*" capture="environment" class="visually-hidden">
+  <button class="shoot" id="shootBtn" disabled>Fotografar cavidade</button>
+
+  <div class="row">
+    <input type="text" id="manual" inputmode="numeric" placeholder="Ou digite o número lido" aria-label="Digitar número da cavidade">
+    <button class="btn" id="manualBtn">Verificar</button>
+  </div>
+
+  <section class="card">
+    <h2>Cavidades reprovadas <span id="nBad" class="tag bad">0</span></h2>
+    <div class="chips" id="chips"></div>
+    <div class="row">
+      <input type="text" id="addBad" inputmode="numeric" placeholder="Ex.: 098106012" aria-label="Adicionar cavidade reprovada">
+      <button class="btn primary" id="addBtn">Adicionar</button>
+    </div>
+    <p class="note">Pode colar vários números de uma vez, separados por vírgula, espaço ou linha.</p>
+  </section>
+
+  <section class="card">
+    <h2>Contagem da seleção <button class="btn" id="resetBtn">Zerar</button></h2>
+    <div class="counts">
+      <div class="count"><b id="cTot">0</b><small>Lidos</small></div>
+      <div class="count ok"><b id="cOk">0</b><small>OK</small></div>
+      <div class="count bad"><b id="cBad">0</b><small>Reprovados</small></div>
+    </div>
+    <ul class="hist" id="hist"></ul>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary>Ajustes de leitura</summary>
+      <div class="card-body">
+        <div class="grid2">
+          <label>Dígitos do código<input type="number" id="digits" min="2" max="15" value="9"></label>
+          <label>Prefixo do molde (opcional)<input type="text" id="prefix" inputmode="numeric" placeholder="Ex.: 098106"></label>
+        </div>
+        <label class="check"><input type="checkbox" id="rotate" checked>Tentar também com a foto de cabeça para baixo</label>
+        <label>Confiança mínima para dar OK (%)<input type="number" id="minconf" min="50" max="99" value="85"></label>
+        <label class="check"><input type="checkbox" id="sound" checked>Som e vibração no resultado</label>
+        <p class="note">Com prefixo preenchido, uma leitura que não comece com ele aparece como "Conferir", o que ajuda a pegar leitura errada ou frasco de outro molde. Se a leitura não achar um número com a quantidade de dígitos definida, o resultado é "Não lido": o app nunca dá OK sem ler o número.</p>
+      </div>
+    </details>
+  </section>
+</div>
+
+<script src="ort.wasm.min.js"></script>
+<script>
+(function(){
+  const $ = id => document.getElementById(id);
+  const store = {
+    get(k,d){try{const v=localStorage.getItem('cav_'+k);return v==null?d:JSON.parse(v)}catch(e){return d}},
+    set(k,v){try{localStorage.setItem('cav_'+k,JSON.stringify(v))}catch(e){}}
+  };
+  let bad = store.get('bad', ['098106012','098106011']);
+  let hist = store.get('hist', []);
+  let counts = store.get('counts', {tot:0, ok:0, bad:0});
+  const cfg = Object.assign({digits:9, prefix:'', rotate:true, sound:true, minconf:85}, store.get('cfg2', {}));
+  $('digits').value = cfg.digits; $('prefix').value = cfg.prefix; $('rotate').checked = cfg.rotate; $('sound').checked = cfg.sound; $('minconf').value = cfg.minconf;
+  function saveCfg(){
+    cfg.digits = Math.max(2, Math.min(15, parseInt($('digits').value,10) || 9));
+    cfg.prefix = $('prefix').value.replace(/\D/g,'');
+    cfg.rotate = $('rotate').checked; cfg.sound = $('sound').checked;
+    cfg.minconf = Math.max(50, Math.min(99, parseInt($('minconf').value,10) || 85));
+    store.set('cfg2', cfg);
+  }
+  ['digits','prefix','rotate','sound','minconf'].forEach(id => $(id).addEventListener('change', saveCfg));
+
+  function renderBad(){
+    const c = $('chips'); c.innerHTML = '';
+    if(!bad.length) c.innerHTML = '<span class="empty">Nenhuma cavidade reprovada cadastrada. Toda leitura válida dará OK.</span>';
+    bad.forEach(n => {
+      const el = document.createElement('span'); el.className = 'chip';
+      el.innerHTML = '<span>'+n+'</span><button aria-label="Remover '+n+'">×</button>';
+      el.querySelector('button').onclick = () => { bad = bad.filter(x => x !== n); store.set('bad', bad); renderBad(); };
+      c.appendChild(el);
+    });
+    $('nBad').textContent = bad.length;
+  }
+  function addBad(){
+    $('addBad').value.split(/[\s,;]+/).map(s => s.replace(/\D/g,'')).filter(Boolean).forEach(p => { if(!bad.includes(p)) bad.push(p); });
+    $('addBad').value = ''; store.set('bad', bad); renderBad();
+  }
+  $('addBtn').onclick = addBad;
+  $('addBad').addEventListener('keydown', e => { if(e.key === 'Enter') addBad(); });
+
+  function renderCounts(){
+    $('cTot').textContent = counts.tot; $('cOk').textContent = counts.ok; $('cBad').textContent = counts.bad;
+    const h = $('hist'); h.innerHTML = '';
+    if(!hist.length){ h.innerHTML = '<li><span></span><span class="empty">As leituras aparecem aqui.</span><span></span></li>'; return; }
+    hist.forEach(r => {
+      const li = document.createElement('li');
+      const label = r.s === 'ok' ? 'OK' : r.s === 'bad' ? 'Reprovado' : r.s === 'warn' ? 'Conferir' : 'Não lido';
+      li.innerHTML = '<time>'+r.t+'</time><span class="n">'+(r.n || '—')+'</span><span class="tag '+(r.s === 'none' ? 'warn' : r.s)+'">'+label+'</span>';
+      h.appendChild(li);
+    });
+  }
+  $('resetBtn').onclick = () => { counts = {tot:0, ok:0, bad:0}; hist = []; store.set('counts', counts); store.set('hist', hist); renderCounts(); };
+  function log(state, num){
+    if(state==='none' && liveOn) return;
+    hist.unshift({t: new Date().toTimeString().slice(0,5), n: num, s: state});
+    hist = hist.slice(0, 200);
+    if(state === 'ok' || state === 'bad'){ counts.tot++; counts[state]++; }
+    store.set('hist', hist); store.set('counts', counts); renderCounts();
+  }
+
+  let actx; let liveOn = false;
+  function beep(kind){
+    if(!cfg.sound) return;
+    try{ if(navigator.vibrate) navigator.vibrate(kind === 'bad' ? [300,120,300,120,300] : kind === 'ok' ? 60 : [120,80,120]); }catch(e){}
+    try{
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      const seq = kind === 'bad' ? [[220,.18],[0,.08],[220,.18],[0,.08],[220,.3]] : kind === 'ok' ? [[880,.12]] : [[520,.12],[0,.06],[520,.12]];
+      let t = actx.currentTime;
+      seq.forEach(([f,d]) => {
+        if(f){ const o = actx.createOscillator(), g = actx.createGain(); o.type = kind === 'bad' ? 'square' : 'sine'; o.frequency.value = f; g.gain.value = .15; o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t+d); }
+        t += d;
+      });
+    }catch(e){}
+  }
+  function show(state, verdict, num, hint){
+    $('status').className = 'status ' + state;
+    $('verdict').textContent = verdict;
+    $('readNum').textContent = num || '— — —';
+    $('hint').textContent = hint || '';
+  }
+
+  // Analisa as linhas lidas. Retorna {kind:'bad'|'ok'|'warn'|'none', num, conf, msg}
+  function pick(lines, source){
+    const N = cfg.digits, P = cfg.prefix;
+    const wins = [];
+    lines.forEach(l => {
+      (l.text.replace(/[\s.\-]/g,'').match(/\d+/g) || []).forEach(run => {
+        if(run.length < N || run.length > N + 3) return;
+        const all = [];
+        for(let i=0;i+N<=run.length;i++) all.push(run.slice(i, i+N));
+        let primary = null;
+        if(run.length === N) primary = run;
+        else if(P) primary = all.find(w => w.startsWith(P)) || null;
+        else primary = run.slice(run.length - N); // símbolo à esquerda (reciclagem) vira dígito extra
+        wins.push({all, primary, conf: l.conf, raw: run});
+      });
+    });
+    if(!wins.length) return {kind:'none', msg: source === 'manual' ? 'O número precisa ter '+N+' dígitos.' : 'Não encontrei um número de '+N+' dígitos. Aproxime, deixe o número reto e evite reflexo forte.'};
+    for(const w of wins){ const hit = w.all.find(n => bad.includes(n)); if(hit) return {kind:'bad', num: hit, conf: w.conf, msg:'Cavidade da lista de reprovadas. Separe este frasco.'}; }
+    const good = wins.filter(w => w.primary);
+    const uniq = [...new Set(good.map(w => w.primary))];
+    if(!uniq.length) return {kind:'warn', num: wins[0].raw, conf: wins[0].conf, msg:'Li '+wins[0].raw+', que não começa com '+P+'. Confira visualmente.'};
+    if(uniq.length > 1) return {kind:'warn', num: uniq.join(' / '), conf: 0, msg:'Li mais de um número. Mostre só um frasco por vez.'};
+    const num = uniq[0], conf = Math.max(...good.map(w => w.conf));
+    if(P && !num.startsWith(P)) return {kind:'warn', num, conf, msg:'O número lido não começa com '+P+'. Confira visualmente.'};
+    if(conf*100 < cfg.minconf) return {kind:'warn', num, conf, msg:'Leitura com confiança de '+Math.round(conf*100)+'%. Confira o número no frasco.'};
+    return {kind:'ok', num, conf, msg:'Cavidade fora da lista de reprovadas. Confiança: '+Math.round(conf*100)+'%.'};
+  }
+  function apply(r){
+    const V = {bad:'Reprovado', ok:'OK', warn:'Conferir', none:'Não lido'}[r.kind];
+    show(r.kind === 'none' ? 'warn' : r.kind, V, r.num || '', r.msg);
+    const vb = $('vbadge'); if(vb){ vb.className = 'vbadge ' + (r.kind === 'none' ? 'warn' : r.kind); vb.textContent = V + (r.num ? ' · ' + r.num.slice(-3) : ''); }
+    beep(r.kind === 'none' ? 'warn' : r.kind);
+    log(r.kind, r.num || '');
+  }
+  function judge(lines, source){ apply(pick(lines, source)); }
+
+  $('manualBtn').onclick = () => { const v = $('manual').value.replace(/\D/g,''); if(!v) return; $('thumb').hidden = true; judge([{text:v, conf:1}], 'manual'); $('manual').value = ''; };
+  $('manual').addEventListener('keydown', e => { if(e.key === 'Enter') $('manualBtn').click(); });
+
+  // ================= OCR no aparelho (PP-OCRv4 via ONNX Runtime Web) =================
+  const CHARS = {"1": "'", "25": "2", "26": "0", "27": "8", "28": "-", "29": "7", "31": ">", "32": ":", "33": "]", "34": ",", "93": "1", "94": "3", "166": "!", "401": "|", "402": ";", "425": "H", "466": ".", "487": "/", "488": "*", "631": "5", "632": "4", "721": "(", "933": "6", "965": ")", "1033": "s", "1034": "u", "1105": "[", "1109": "9", "1217": "S", "1218": "Y", "1219": "F", "1220": "D", "1221": "A", "1310": "P", "1381": "T", "1529": "@", "1811": "%", "1822": "\"", "1958": "r", "1989": "=", "2156": "q", "2456": "?", "2697": "J", "2710": "l", "2854": "&", "2993": "x", "3316": "z", "3332": "e", "3333": "t", "3463": "b", "3490": "<", "3506": "L", "3537": "w", "3538": "i", "3539": "h", "3573": "+", "3587": "I", "3588": "B", "3589": "N", "3626": "^", "3627": "_", "3639": "M", "4078": "}", "4128": "~", "4136": "Z", "4244": "C", "4245": "o", "4381": "E", "4389": "f", "4428": "\\", "4497": "U", "4544": "a", "4545": "p", "4546": "y", "4547": "n", "4548": "g", "4731": "Q", "4741": "O", "4849": "k", "4885": "$", "4902": "c", "4922": "v", "5033": "W", "5127": "R", "5128": "G", "5171": "d", "5193": "K", "5200": "X", "5233": "m", "5335": "`", "5405": "V", "5461": "#", "5489": "{", "5493": "j", "6624": " "};
+  const MODEL_VER = 'ppocrv4-1';
+  let detS = null, recS = null;
+
+  function idb(){ return new Promise((res, rej) => { try{ const r = indexedDB.open('leitor-cav', 1); r.onupgradeneeded = () => r.result.createObjectStore('m'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }catch(e){ rej(e); } }); }
+  async function cacheGet(k){ try{ const db = await idb(); return await new Promise(res => { const q = db.transaction('m').objectStore('m').get(k); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); }); }catch(e){ return null; } }
+  async function cachePut(k, v){ try{ const db = await idb(); db.transaction('m','readwrite').objectStore('m').put(v, k); }catch(e){} }
+
+  async function loadModel(name, label, share, base){
+    const key = MODEL_VER + '/' + name;
+    let buf = await cacheGet(key);
+    if(buf) return buf;
+    const r = await fetch(name);
+    if(!r.ok) throw new Error('download ' + name + ' ' + r.status);
+    const total = +r.headers.get('content-length') || 0;
+    if(r.body && total){
+      const reader = r.body.getReader(); const parts = []; let got = 0;
+      for(;;){ const {done, value} = await reader.read(); if(done) break; parts.push(value); got += value.length;
+        $('engineTxt').textContent = 'Baixando leitor… ' + Math.round(base + share * got / total) + '%'; }
+      const out = new Uint8Array(got); let o = 0; parts.forEach(p => { out.set(p, o); o += p.length; }); buf = out.buffer;
+    } else buf = await r.arrayBuffer();
+    cachePut(key, buf);
+    return buf;
+  }
+
+  async function initOCR(){
+    try{
+      const here = location.href.replace(/[#?].*$/,'').replace(/[^/]*$/,'');
+      ort.env.wasm.wasmPaths = here;
+      ort.env.wasm.numThreads = 1;
+      ort.env.wasm.proxy = false;
+      const detB = await loadModel('det-model.wasm', 'detecção', 30, 0);
+      const recB = await loadModel('rec-model.wasm', 'leitura', 70, 30);
+      $('engineTxt').textContent = 'Preparando leitor…';
+      detS = await ort.InferenceSession.create(detB, { executionProviders: ['wasm'] });
+      recS = await ort.InferenceSession.create(recB, { executionProviders: ['wasm'] });
+      $('dot').className = 'dot ready'; $('engineTxt').textContent = 'Leitor pronto (offline)';
+      $('shootBtn').disabled = false;
+      return true;
+    }catch(err){
+      console.error(err);
+      $('dot').className = 'dot err'; $('engineTxt').textContent = 'Leitor não carregou';
+      show('warn', 'Sem leitor', '', 'O leitor não carregou neste aparelho ('+(err && err.message || err)+'). Use o campo de digitação e recarregue a página com internet.');
+    }
+  }
+
+  function toTensorBGR(ctx, w, h, W){ // normaliza (x/255-0.5)/0.5, ordem BGR, largura W (pad com 0)
+    const d = ctx.getImageData(0, 0, w, h).data; const plane = h * W;
+    const f = new Float32Array(3 * plane);
+    for(let y=0;y<h;y++) for(let x=0;x<w;x++){
+      const i = (y*w + x) * 4, j = y*W + x;
+      f[j] = d[i+2]/127.5 - 1; f[plane + j] = d[i+1]/127.5 - 1; f[2*plane + j] = d[i]/127.5 - 1;
+    }
+    return f;
+  }
+
+  async function detect(src, maxW){ // src: canvas
+    let w = src.width, h = src.height;
+    let k = 1; const mn = Math.min(w, h);
+    if(maxW){ k = maxW / w; }
+    else { if(mn < 736) k = 736 / mn; if(Math.max(w, h) * k > 1920) k = 1920 / Math.max(w, h); }
+    const W = Math.max(32, Math.round(w*k/32)*32), H = Math.max(32, Math.round(h*k/32)*32);
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const x = c.getContext('2d', {willReadFrequently: true}); x.drawImage(src, 0, 0, W, H);
+    const t = new ort.Tensor('float32', toTensorBGR(x, W, H, W), [1, 3, H, W]);
+    const out = await detS.run({ [detS.inputNames[0]]: t });
+    const P = out[detS.outputNames[0]].data;
+    // binariza + dilatação 2x2
+    const bin = new Uint8Array(W*H);
+    for(let i=0;i<W*H;i++) if(P[i] > 0.3) bin[i] = 1;
+    const dil = new Uint8Array(W*H);
+    for(let y=0;y<H;y++) for(let xx=0;xx<W;xx++){ const i = y*W+xx; if(bin[i] || (xx>0 && bin[i-1]) || (y>0 && bin[i-W]) || (xx>0 && y>0 && bin[i-W-1])) dil[i] = 1; }
+    // componentes conectados
+    const lab = new Int32Array(W*H); const boxes = []; let id = 0; const stack = [];
+    for(let s=0;s<W*H;s++){
+      if(!dil[s] || lab[s]) continue;
+      id++; lab[s] = id; stack.push(s);
+      let x0=W, x1=0, y0=H, y1=0, n=0, sum=0;
+      while(stack.length){
+        const p = stack.pop(); const py = (p / W) | 0, px = p - py*W;
+        n++; sum += P[p]; if(px<x0)x0=px; if(px>x1)x1=px; if(py<y0)y0=py; if(py>y1)y1=py;
+        const nb = [p-1, p+1, p-W, p+W];
+        for(let q=0;q<4;q++){ const v = nb[q]; if(v<0||v>=W*H) continue; if(q===0&&px===0) continue; if(q===1&&px===W-1) continue; if(dil[v] && !lab[v]){ lab[v] = id; stack.push(v); } }
+      }
+      const bw = x1-x0+1, bh = y1-y0+1;
+      if(Math.min(bw, bh) < 4 || sum/n < 0.5) continue;
+      const dd = (bw*bh*1.6) / (2*(bw+bh));
+      boxes.push({ x: Math.max(0, (x0-dd)/k*W/(w*k)*1), y0:0, raw:[x0-dd, y0-dd, x1+dd, y1+dd] });
+    }
+    const sx = w / W, sy = h / H;
+    return boxes.map(b => { const [a,bq,cq,dq] = b.raw; return { x: Math.max(0, a*sx), y: Math.max(0, bq*sy), x2: Math.min(w, cq*sx), y2: Math.min(h, dq*sy) }; })
+                .filter(b => (b.x2-b.x) > 8 && (b.y2-b.y) > 6)
+                .sort((a,b) => a.y - b.y);
+  }
+
+  async function recognize(src, b){
+    const bw = b.x2 - b.x, bh = b.y2 - b.y;
+    const Wr = Math.min(1600, Math.max(8, Math.ceil(48 * bw / bh)));
+    const W = Math.max(320, Wr);
+    const c = document.createElement('canvas'); c.width = Wr; c.height = 48;
+    const x = c.getContext('2d', {willReadFrequently: true}); x.drawImage(src, b.x, b.y, bw, bh, 0, 0, Wr, 48);
+    const t = new ort.Tensor('float32', toTensorBGR(x, Wr, 48, W), [1, 3, 48, W]);
+    const out = await recS.run({ [recS.inputNames[0]]: t });
+    const o = out[recS.outputNames[0]]; const [ , T, C] = o.dims; const D = o.data;
+    let text = '', last = -1; const probs = [];
+    for(let i=0;i<T;i++){
+      let bi = 0, bv = -1; const off = i*C;
+      for(let j=0;j<C;j++){ const v = D[off+j]; if(v > bv){ bv = v; bi = j; } }
+      if(bi !== 0 && bi !== last){ text += (CHARS[bi] != null ? CHARS[bi] : '?'); probs.push(bv); }
+      last = bi;
+    }
+    const conf = probs.length ? probs.reduce((a,b)=>a+b,0) / probs.length : 0;
+    return { text, conf };
+  }
+
+  function rot180(src){ const c = document.createElement('canvas'); c.width = src.width; c.height = src.height; const x = c.getContext('2d'); x.translate(c.width, c.height); x.rotate(Math.PI); x.drawImage(src, 0, 0); return c; }
+
+  async function readImage(img){
+    const k = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth*k); c.height = Math.round(img.naturalHeight*k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    const tries = cfg.rotate ? [c, null] : [c];
+    let all = [];
+    for(let i=0;i<tries.length;i++){
+      const src = tries[i] || rot180(c);
+      if(i) show('busy', 'Lendo…', '', 'Tentando com a foto girada.');
+      const boxes = await detect(src);
+      const lines = [];
+      for(const b of boxes.slice(0, 12)) lines.push(await recognize(src, b));
+      all = all.concat(lines);
+      const N = cfg.digits;
+      if(lines.some(l => (l.text.replace(/\s/g,'').match(/\d+/g) || []).some(r => r.length >= N && r.length <= N+3))) break;
+    }
+    return all;
+  }
+  window.__readImage = readImage; // usado em teste
+
+  $('shootBtn').onclick = () => { try{ actx = actx || new (window.AudioContext || window.webkitAudioContext)(); actx.resume(); }catch(e){} $('cam').click(); };
+  $('cam').addEventListener('change', async e => {
+    const file = e.target.files && e.target.files[0]; e.target.value = '';
+    if(!file || !recS) return;
+    $('shootBtn').disabled = true;
+    show('busy', 'Lendo…', '', 'Lendo no próprio celular.');
+    try{
+      const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = URL.createObjectURL(file); });
+      $('thumb').src = img.src; $('thumb').hidden = false;
+      const t0 = performance.now();
+      const lines = await readImage(img);
+      judge(lines, 'foto');
+      $('hint').textContent += ' (' + ((performance.now()-t0)/1000).toFixed(1) + ' s)';
+    }catch(err){
+      console.error(err);
+      show('warn', 'Erro', '', 'Não consegui processar a foto. Tente de novo.'); beep('warn');
+    }finally{ $('shootBtn').disabled = false; }
+  });
+
+  // ================= Modo vídeo (câmera sempre aberta) =================
+  const video = $('video');
+  let stream = null, torchOn = false, paused = false;
+  let lastSeen = '', streak = 0, lastJudged = '', armed = true, noneCount = 0, presentSince = 0, warned = false, fps = 0;
+
+  function grabGuide(){
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const box = $('camBox').getBoundingClientRect();
+    const scale = Math.max(box.width / vw, box.height / vh);
+    const offX = (vw*scale - box.width) / 2, offY = (vh*scale - box.height) / 2;
+    const g = $('guide').getBoundingClientRect();
+    const gx = g.left - box.left, gy = g.top - box.top;
+    const sx = (gx + offX) / scale, sy = (gy + offY) / scale, sw = g.width / scale, sh = g.height / scale;
+    const W = Math.min(960, Math.round(sw)), H = Math.round(sh * W / sw);
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    c.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, W, H);
+    return c;
+  }
+  async function readStrip(c){
+    const boxes = await detect(c, 640);
+    const lines = [];
+    for(const b of boxes.slice(0, 6)) lines.push(await recognize(c, b));
+    return lines;
+  }
+  window.__readStrip = readStrip;
+
+  async function loop(){
+    if(!liveOn) return;
+    if(paused || !video.videoWidth || document.hidden){ setTimeout(loop, 250); return; }
+    const t0 = performance.now();
+    try{
+      let lines = await readStrip(grabGuide());
+      let r = pick(lines, 'foto');
+      if(r.kind === 'none' && cfg.rotate){ // frasco de cabeça para baixo
+        const c2 = rot180(grabGuide()); lines = await readStrip(c2); r = pick(lines, 'foto');
+      }
+      step(r);
+    }catch(e){ console.error(e); }
+    const dt = performance.now() - t0; fps = 1000 / Math.max(1, dt);
+    $('liveInfo').textContent = 'Lendo ao vivo · ' + (dt/1000).toFixed(1) + ' s por leitura';
+    setTimeout(loop, 60);
+  }
+
+  function step(r){
+    const now = performance.now();
+    if(r.kind === 'none'){
+      noneCount++;
+      if(noneCount >= 2){ armed = true; streak = 0; lastSeen = ''; presentSince = 0; warned = false; $('camBox').className = 'cam'; if(noneCount === 2){ $('vbadge').className = 'vbadge'; $('vbadge').textContent = 'Aguardando frasco'; } }
+      return;
+    }
+    noneCount = 0;
+    if(!presentSince) presentSince = now;
+    const key = r.kind + ':' + r.num;
+    if(key === lastSeen) streak++; else { lastSeen = key; streak = 1; }
+    const fresh = armed || r.num !== lastJudged;
+    if(!fresh) return;
+    // Decide com 2 leituras iguais seguidas. Reprovado e OK decidem; "Conferir" só depois de 3 s sem decisão.
+    if(streak >= 2 && (r.kind === 'bad' || r.kind === 'ok')){
+      apply(r); lastJudged = r.num; armed = false; warned = false;
+      $('camBox').className = 'cam ' + r.kind; return;
+    }
+    if(r.kind === 'warn' && !warned && now - presentSince > 3000){
+      apply(r); warned = true; $('camBox').className = 'cam warn';
+    }
+  }
+
+  async function startLive(){
+    if(!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) return false;
+    try{
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: {ideal: 1920}, height: {ideal: 1080} }, audio: false });
+    }catch(e){ return false; }
+    video.srcObject = stream;
+    try{ await video.play(); }catch(e){}
+    const track = stream.getVideoTracks()[0];
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    $('torchBtn').hidden = !caps.torch;
+    if(caps.focusMode && caps.focusMode.includes('continuous')) track.applyConstraints({advanced:[{focusMode:'continuous'}]}).catch(()=>{});
+    $('liveBox').hidden = false; $('shootBtn').hidden = true;
+    show('idle', 'Pronto', '', 'Passe o fundo do frasco na moldura. O resultado aparece sozinho.');
+    liveOn = true;
+    try{ if(navigator.wakeLock) await navigator.wakeLock.request('screen'); }catch(e){}
+    loop();
+    return true;
+  }
+  $('torchBtn').onclick = async () => { try{ torchOn = !torchOn; await stream.getVideoTracks()[0].applyConstraints({advanced:[{torch: torchOn}]}); $('torchBtn').classList.toggle('on', torchOn); }catch(e){} };
+  $('pauseBtn').onclick = () => { paused = !paused; $('pauseBtn').textContent = paused ? 'Continuar' : 'Pausar'; $('liveInfo').textContent = paused ? 'Pausado' : 'Lendo ao vivo'; };
+  document.addEventListener('click', () => { try{ actx = actx || new (window.AudioContext || window.webkitAudioContext)(); actx.resume(); }catch(e){} }, {once:true});
+  document.addEventListener('visibilitychange', async () => { if(!document.hidden && liveOn){ try{ if(navigator.wakeLock) await navigator.wakeLock.request('screen'); }catch(e){} } });
+
+  renderBad(); renderCounts();
+  initOCR().then(ok => { if(ok) startLive(); });
+})();
+
+</script>
+</body></html>
