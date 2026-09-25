@@ -96,7 +96,9 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
 @media (prefers-reduced-motion: reduce){*{transition:none!important}}
 .cam{position:relative;border-radius:14px;overflow:hidden;background:#000;aspect-ratio:3/4;max-width:100%;max-height:52vh;width:100%;border:4px solid transparent}
 .cam video{width:100%;height:100%;object-fit:cover;display:block}
-.cam .frame{position:absolute;left:5%;right:5%;top:36%;height:28%;border:3px solid #fff;border-radius:10px;box-shadow:0 0 0 999px rgba(0,0,0,.35)}
+.zoomrow{flex-direction:row;align-items:center;gap:10px;font-size:13px;color:var(--ink)}.zoomrow input{flex:1;accent-color:var(--accent)}.zoomrow b{font:600 13px var(--mono);min-width:4ch;text-align:right}
+.seen{font:500 12px var(--mono);color:var(--muted);word-break:break-all}
+.cam .frame{position:absolute;left:4%;right:4%;top:32%;height:36%;border:3px solid #fff;border-radius:10px;box-shadow:0 0 0 999px rgba(0,0,0,.35)}
 .cam .frame span{position:absolute;top:-24px;left:0;right:0;text-align:center;color:#fff;font:600 13px var(--body);text-shadow:0 1px 3px #000}
 .cam.ok{border-color:var(--ok)}.cam.ok .frame{border-color:var(--ok)}
 .cam.bad{border-color:var(--bad)}.cam.bad .frame{border-color:var(--bad)}
@@ -121,6 +123,8 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
       <div class="vbadge" id="vbadge">Aguardando frasco</div>
     </div>
     <div class="camtools"><small id="liveInfo">Lendo ao vivo</small><button class="btn" id="torchBtn" hidden>Lanterna</button><button class="btn" id="pauseBtn">Pausar</button></div>
+    <label class="zoomrow" id="zoomRow" hidden>Zoom <input type="range" id="zoom" min="1" max="2" step="0.1" value="1"><b id="zoomVal">1.0x</b></label>
+    <small class="seen" id="seenTxt">Texto visto: nada</small>
   </section>
 
   <section class="status idle" id="status" aria-live="assertive">
@@ -167,7 +171,7 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
           <label>Prefixo do molde (opcional)<input type="text" id="prefix" inputmode="numeric" placeholder="Ex.: 098106"></label>
         </div>
         <label class="check"><input type="checkbox" id="rotate" checked>Tentar também com a foto de cabeça para baixo</label>
-        <label>Confiança mínima para dar OK (%)<input type="number" id="minconf" min="50" max="99" value="85"></label>
+        <label>Confiança mínima para dar OK (%)<input type="number" id="minconf" min="50" max="99" value="90"></label>
         <label class="check"><input type="checkbox" id="sound" checked>Som e vibração no resultado</label>
         <p class="note">Com prefixo preenchido, uma leitura que não comece com ele aparece como "Conferir", o que ajuda a pegar leitura errada ou frasco de outro molde. Se a leitura não achar um número com a quantidade de dígitos definida, o resultado é "Não lido": o app nunca dá OK sem ler o número.</p>
       </div>
@@ -186,13 +190,14 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
   let bad = store.get('bad', ['098106012','098106011']);
   let hist = store.get('hist', []);
   let counts = store.get('counts', {tot:0, ok:0, bad:0});
-  const cfg = Object.assign({digits:9, prefix:'', rotate:true, sound:true, minconf:85}, store.get('cfg2', {}));
+  const cfg = Object.assign({digits:9, prefix:'', rotate:true, sound:true, minconf:90}, store.get('cfg2', {}));
+  if(cfg.minconf === 85) cfg.minconf = 90; // padrão antigo: sobe para reduzir OK com leitura duvidosa
   $('digits').value = cfg.digits; $('prefix').value = cfg.prefix; $('rotate').checked = cfg.rotate; $('sound').checked = cfg.sound; $('minconf').value = cfg.minconf;
   function saveCfg(){
     cfg.digits = Math.max(2, Math.min(15, parseInt($('digits').value,10) || 9));
     cfg.prefix = $('prefix').value.replace(/\D/g,'');
     cfg.rotate = $('rotate').checked; cfg.sound = $('sound').checked;
-    cfg.minconf = Math.max(50, Math.min(99, parseInt($('minconf').value,10) || 85));
+    cfg.minconf = Math.max(50, Math.min(99, parseInt($('minconf').value,10) || 90));
     store.set('cfg2', cfg);
   }
   ['digits','prefix','rotate','sound','minconf'].forEach(id => $(id).addEventListener('change', saveCfg));
@@ -332,7 +337,7 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
       $('engineTxt').textContent = 'Preparando leitor…';
       detS = await ort.InferenceSession.create(detB, { executionProviders: ['wasm'] });
       recS = await ort.InferenceSession.create(recB, { executionProviders: ['wasm'] });
-      $('dot').className = 'dot ready'; $('engineTxt').textContent = 'Leitor pronto (offline)';
+      $('dot').className = 'dot ready'; $('engineTxt').textContent = 'Leitor pronto (offline) · v2';
       $('shootBtn').disabled = false;
       return true;
     }catch(err){
@@ -352,6 +357,7 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
     return f;
   }
 
+  // Detecta regiões de texto. Cada caixa sai girada no ângulo real do texto: {cx, cy, w, h, ang} em pixels de src.
   async function detect(src, maxW){ // src: canvas
     let w = src.width, h = src.height;
     let k = 1; const mn = Math.min(w, h);
@@ -363,73 +369,180 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
     const t = new ort.Tensor('float32', toTensorBGR(x, W, H, W), [1, 3, H, W]);
     const out = await detS.run({ [detS.inputNames[0]]: t });
     const P = out[detS.outputNames[0]].data;
-    // binariza + dilatação 2x2
+    // binariza + dilatação 2x2 (limiar baixo para relevo fraco no vidro)
     const bin = new Uint8Array(W*H);
-    for(let i=0;i<W*H;i++) if(P[i] > 0.3) bin[i] = 1;
+    for(let i=0;i<W*H;i++) if(P[i] > 0.25) bin[i] = 1;
     const dil = new Uint8Array(W*H);
     for(let y=0;y<H;y++) for(let xx=0;xx<W;xx++){ const i = y*W+xx; if(bin[i] || (xx>0 && bin[i-1]) || (y>0 && bin[i-W]) || (xx>0 && y>0 && bin[i-W-1])) dil[i] = 1; }
-    // componentes conectados
-    const lab = new Int32Array(W*H); const boxes = []; let id = 0; const stack = [];
+    // componentes conectados + orientação pelos momentos (equivale ao minAreaRect do PaddleOCR)
+    const lab = new Uint8Array(W*H); const boxes = []; const stack = []; const pts = [];
+    const sx = w / W, sy = h / H;
     for(let s=0;s<W*H;s++){
       if(!dil[s] || lab[s]) continue;
-      id++; lab[s] = id; stack.push(s);
-      let x0=W, x1=0, y0=H, y1=0, n=0, sum=0;
+      lab[s] = 1; stack.push(s); pts.length = 0;
+      let x0=W, x1=0, y0=H, y1=0, n=0, sum=0, mx=0, my=0;
       while(stack.length){
         const p = stack.pop(); const py = (p / W) | 0, px = p - py*W;
-        n++; sum += P[p]; if(px<x0)x0=px; if(px>x1)x1=px; if(py<y0)y0=py; if(py>y1)y1=py;
-        const nb = [p-1, p+1, p-W, p+W];
-        for(let q=0;q<4;q++){ const v = nb[q]; if(v<0||v>=W*H) continue; if(q===0&&px===0) continue; if(q===1&&px===W-1) continue; if(dil[v] && !lab[v]){ lab[v] = id; stack.push(v); } }
+        pts.push(p); n++; sum += P[p]; mx += px; my += py;
+        if(px<x0)x0=px; if(px>x1)x1=px; if(py<y0)y0=py; if(py>y1)y1=py;
+        if(px>0 && dil[p-1] && !lab[p-1]){ lab[p-1] = 1; stack.push(p-1); }
+        if(px<W-1 && dil[p+1] && !lab[p+1]){ lab[p+1] = 1; stack.push(p+1); }
+        if(p>=W && dil[p-W] && !lab[p-W]){ lab[p-W] = 1; stack.push(p-W); }
+        if(p+W<W*H && dil[p+W] && !lab[p+W]){ lab[p+W] = 1; stack.push(p+W); }
       }
-      const bw = x1-x0+1, bh = y1-y0+1;
-      if(Math.min(bw, bh) < 4 || sum/n < 0.5) continue;
-      const dd = (bw*bh*1.6) / (2*(bw+bh));
-      boxes.push({ x: Math.max(0, (x0-dd)/k*W/(w*k)*1), y0:0, raw:[x0-dd, y0-dd, x1+dd, y1+dd] });
+      if(n < 12 || sum/n < 0.45) continue;
+      mx /= n; my /= n;
+      let cxx=0, cyy=0, cxy=0;
+      for(const p of pts){ const py = (p / W) | 0, dx = p - py*W - mx, dy = py - my; cxx += dx*dx; cyy += dy*dy; cxy += dx*dy; }
+      let ang = 0.5 * Math.atan2(2*cxy, cxx - cyy);
+      let ca = Math.cos(ang), sa = Math.sin(ang), u0=1e9, u1=-1e9, v0=1e9, v1=-1e9;
+      for(const p of pts){ const py = (p / W) | 0, dx = p - py*W - mx, dy = py - my; const u = dx*ca + dy*sa, v = -dx*sa + dy*ca; if(u<u0)u0=u; if(u>u1)u1=u; if(v<v0)v0=v; if(v>v1)v1=v; }
+      let bw = u1-u0+1, bh = v1-v0+1, cx, cy;
+      if(bw / bh < 1.5 || Math.abs(ang) < 0.035){ // bloco curto ou já reto: caixa alinhada
+        ang = 0; bw = x1-x0+1; bh = y1-y0+1; cx = (x0+x1)/2; cy = (y0+y1)/2;
+      } else { const cu = (u0+u1)/2, cv = (v0+v1)/2; cx = mx + cu*ca - cv*sa; cy = my + cu*sa + cv*ca; }
+      if(Math.min(bw, bh) < 3) continue;
+      const dd = (bw*bh*1.5) / (bw+bh); // unclip: amplia a caixa pelos dois lados
+      boxes.push({ cx: cx*sx, cy: cy*sy, w: (bw+dd)*sx, h: (bh+dd)*sy, ang });
     }
-    const sx = w / W, sy = h / H;
-    return boxes.map(b => { const [a,bq,cq,dq] = b.raw; return { x: Math.max(0, a*sx), y: Math.max(0, bq*sy), x2: Math.min(w, cq*sx), y2: Math.min(h, dq*sy) }; })
-                .filter(b => (b.x2-b.x) > 8 && (b.y2-b.y) > 6)
-                .sort((a,b) => a.y - b.y);
+    return boxes.filter(b => b.w > 8 && b.h > 6).sort((a,b) => a.cy - b.cy);
   }
 
-  async function recognize(src, b){
-    const bw = b.x2 - b.x, bh = b.y2 - b.y;
-    const Wr = Math.min(1600, Math.max(8, Math.ceil(48 * bw / bh)));
-    const W = Math.max(320, Wr);
+  // Tabela de decodificação só com dígitos: letras parecidas contam como o dígito (O→0, I→1, S→5, B→8…)
+  const LOOK = {'0':'0OoDQ','1':'1Il|i!','2':'2Zz','3':'3','4':'4','5':'5Ss','6':'6b','7':'7','8':'8B','9':'9gq'};
+  let GROUP = null; // por classe: 0 branco, 1..10 dígito, 11 separador, -1 outra letra
+  function groups(C){
+    if(GROUP && GROUP.length === C) return GROUP;
+    GROUP = new Int8Array(C).fill(-1); GROUP[0] = 0;
+    for(const [i, ch] of Object.entries(CHARS)){
+      if(+i >= C) continue;
+      for(const d in LOOK) if(LOOK[d].includes(ch)) GROUP[+i] = 1 + +d;
+      if(' .-,'.includes(ch)) GROUP[+i] = 11;
+    }
+    return GROUP;
+  }
+
+  function cropBox(src, b, flip, enh){
+    const Wr = Math.min(1600, Math.max(8, Math.ceil(48 * b.w / b.h)));
     const c = document.createElement('canvas'); c.width = Wr; c.height = 48;
-    const x = c.getContext('2d', {willReadFrequently: true}); x.drawImage(src, b.x, b.y, bw, bh, 0, 0, Wr, 48);
+    const x = c.getContext('2d', {willReadFrequently: true});
+    x.fillStyle = '#808080'; x.fillRect(0, 0, Wr, 48);
+    x.translate(Wr/2, 24); x.scale(Wr / b.w, 48 / b.h); x.rotate(-(b.ang + (flip ? Math.PI : 0)));
+    x.imageSmoothingQuality = 'high';
+    x.drawImage(src, -b.cx, -b.cy);
+    if(enh) stretch(x, Wr, 48);
+    return {x, Wr};
+  }
+  // Estica o contraste do recorte (percentis 2% e 98% da luminância)
+  function stretch(x, w, h){
+    const id = x.getImageData(0, 0, w, h), d = id.data, hist = new Uint32Array(256), n = w*h;
+    for(let i=0;i<d.length;i+=4) hist[(d[i]*77 + d[i+1]*150 + d[i+2]*29) >> 8]++;
+    let lo = 0, hi = 255, acc = 0;
+    for(let v=0;v<256;v++){ acc += hist[v]; if(acc >= n*0.02){ lo = v; break; } }
+    acc = 0; for(let v=255;v>=0;v--){ acc += hist[v]; if(acc >= n*0.02){ hi = v; break; } }
+    if(hi - lo < 8) return;
+    const s = 255 / (hi - lo);
+    for(let i=0;i<d.length;i+=4){ d[i] = (d[i]-lo)*s; d[i+1] = (d[i+1]-lo)*s; d[i+2] = (d[i+2]-lo)*s; }
+    x.putImageData(id, 0, 0);
+  }
+
+  async function recognize(src, b, flip, enh){
+    const {x, Wr} = cropBox(src, b, flip, enh);
+    const W = Math.max(320, Wr);
     const t = new ort.Tensor('float32', toTensorBGR(x, Wr, 48, W), [1, 3, 48, W]);
     const out = await recS.run({ [recS.inputNames[0]]: t });
     const o = out[recS.outputNames[0]]; const [ , T, C] = o.dims; const D = o.data;
-    let text = '', last = -1; const probs = [];
+    const G = groups(C); const sc = new Float32Array(13); const row = new Float32Array(C);
+    let text = '', raw = '', last = -1, lastRaw = -1; const probs = [];
     for(let i=0;i<T;i++){
-      let bi = 0, bv = -1; const off = i*C;
-      for(let j=0;j<C;j++){ const v = D[off+j]; if(v > bv){ bv = v; bi = j; } }
-      if(bi !== 0 && bi !== last){ text += (CHARS[bi] != null ? CHARS[bi] : '?'); probs.push(bv); }
-      last = bi;
+      const off = i*C; let sum = 0, bi = 0, bv = -Infinity;
+      for(let j=0;j<C;j++){ const v = D[off+j]; row[j] = v; sum += v; if(v > bv){ bv = v; bi = j; } }
+      if(Math.abs(sum - 1) > 0.05){ // saída sem softmax: normaliza
+        let s = 0; for(let j=0;j<C;j++){ row[j] = Math.exp(row[j] - bv); s += row[j]; } for(let j=0;j<C;j++) row[j] /= s;
+      }
+      if(bi !== 0 && bi !== lastRaw) raw += (CHARS[bi] != null ? CHARS[bi] : '?'); lastRaw = bi;
+      sc.fill(0);
+      for(let j=0;j<C;j++){ const g = G[j]; sc[g < 0 ? 12 : g] += row[j]; }
+      let bg = 0; for(let g=1;g<13;g++) if(sc[g] > sc[bg]) bg = g;
+      if(bg !== 0 && bg !== last){
+        if(bg <= 10){ text += String(bg - 1); probs.push(sc[bg]); } else text += bg === 11 ? ' ' : '?';
+      }
+      last = bg;
     }
     const conf = probs.length ? probs.reduce((a,b)=>a+b,0) / probs.length : 0;
-    return { text, conf };
+    return { text, conf, raw };
   }
 
-  function rot180(src){ const c = document.createElement('canvas'); c.width = src.width; c.height = src.height; const x = c.getContext('2d'); x.translate(c.width, c.height); x.rotate(Math.PI); x.drawImage(src, 0, 0); return c; }
+  function validRun(text){ const N = cfg.digits; return (text.replace(/[\s.\-]/g,'').match(/\d+/g) || []).some(r => r.length >= N && r.length <= N+3); }
+  function hasDigits(text){ return /\d{2}/.test(text.replace(/[\s.\-]/g,'')); }
+
+  // Realça relevo fraco: normalização local de contraste (média/desvio numa janela)
+  function enhance(src){
+    const w = src.width, h = src.height, r = Math.max(6, Math.round(Math.min(w, h) / 12));
+    const x0 = src.getContext('2d', {willReadFrequently: true}); const d = x0.getImageData(0, 0, w, h).data;
+    const W1 = w + 1, S = new Float64Array(W1*(h+1)), Q = new Float64Array(W1*(h+1));
+    for(let y=0;y<h;y++){ let rs = 0, rq = 0; for(let xx=0;xx<w;xx++){ const i = (y*w+xx)*4; const g = (d[i]*77 + d[i+1]*150 + d[i+2]*29) >> 8; rs += g; rq += g*g; S[(y+1)*W1+xx+1] = S[y*W1+xx+1] + rs; Q[(y+1)*W1+xx+1] = Q[y*W1+xx+1] + rq; } }
+    const c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d', {willReadFrequently: true});
+    const od = x.createImageData(w, h), o = od.data;
+    for(let y=0;y<h;y++){ const ya = Math.max(0, y-r), yb = Math.min(h, y+r+1);
+      for(let xx=0;xx<w;xx++){ const xa = Math.max(0, xx-r), xb = Math.min(w, xx+r+1), n = (yb-ya)*(xb-xa);
+        const s = S[yb*W1+xb] - S[ya*W1+xb] - S[yb*W1+xa] + S[ya*W1+xa], q = Q[yb*W1+xb] - Q[ya*W1+xb] - Q[yb*W1+xa] + Q[ya*W1+xa];
+        const m = s/n, sd = Math.sqrt(Math.max(0, q/n - m*m)); const i = (y*w+xx)*4;
+        const g = (d[i]*77 + d[i+1]*150 + d[i+2]*29) >> 8; const v = 128 + 60 * (g - m) / (sd + 6);
+        o[i] = o[i+1] = o[i+2] = v < 0 ? 0 : v > 255 ? 255 : v; o[i+3] = 255; } }
+    x.putImageData(od, 0, 0); return c;
+  }
+
+  // Junta pedaços do mesmo número que o detector separou (mesma linha, lado a lado)
+  function mergeLines(items){
+    const out = [];
+    const ds = items.filter(it => hasDigits(it.text) && !validRun(it.text));
+    if(ds.length < 2) return out;
+    const a = ds[0].b.ang, ca = Math.cos(a), sa = Math.sin(a);
+    ds.forEach(it => { it.u = it.b.cx*ca + it.b.cy*sa; it.v = -it.b.cx*sa + it.b.cy*ca; if(it.flip) { it.u = -it.u; } });
+    ds.sort((p, q) => p.u - q.u);
+    let chain = [ds[0]];
+    const flush = () => { if(chain.length > 1){ const text = chain.map(c => c.text).join(''); out.push({ text, conf: Math.min(...chain.map(c => c.conf)), raw: chain.map(c => c.raw).join(' ') }); } };
+    for(let i=1;i<ds.length;i++){
+      const p = chain[chain.length-1], q = ds[i], hh = (p.b.h + q.b.h) / 2;
+      const gap = (q.u - q.b.w/2) - (p.u + p.b.w/2);
+      if(Math.abs(q.v - p.v) < hh*0.6 && gap < hh*2.5 && p.flip === q.flip && Math.abs(q.b.ang - p.b.ang) < 0.25) chain.push(q);
+      else { flush(); chain = [q]; }
+    }
+    flush();
+    return out;
+  }
+
+  // Lê um recorte: detecta, lê cada caixa (girando 180° se não achar número) e junta pedaços.
+  async function readLines(src, maxW, maxBoxes){
+    const boxes = (await detect(src, maxW)).slice(0, maxBoxes);
+    const items = [];
+    for(const b of boxes){
+      let best = null;
+      for(const flip of cfg.rotate ? [false, true] : [false]){
+        for(const enh of [true, false]){
+          const r = await recognize(src, b, flip, enh); r.b = b; r.flip = flip;
+          if(!best || (validRun(r.text) && !validRun(best.text)) || (validRun(r.text) === validRun(best.text) && r.conf > best.conf)) best = r;
+          if(validRun(r.text) && r.conf > 0.9) break;
+        }
+        if(validRun(best.text) && best.conf > 0.9) break;
+      }
+      items.push(best);
+    }
+    return items.concat(mergeLines(items));
+  }
+  function seen(lines){ return lines.map(l => l.raw || l.text).filter(Boolean).join(' | '); }
 
   async function readImage(img){
     const k = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
     const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth*k); c.height = Math.round(img.naturalHeight*k);
-    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-    const tries = cfg.rotate ? [c, null] : [c];
-    let all = [];
-    for(let i=0;i<tries.length;i++){
-      const src = tries[i] || rot180(c);
-      if(i) show('busy', 'Lendo…', '', 'Tentando com a foto girada.');
-      const boxes = await detect(src);
-      const lines = [];
-      for(const b of boxes.slice(0, 12)) lines.push(await recognize(src, b));
-      all = all.concat(lines);
-      const N = cfg.digits;
-      if(lines.some(l => (l.text.replace(/\s/g,'').match(/\d+/g) || []).some(r => r.length >= N && r.length <= N+3))) break;
+    c.getContext('2d', {willReadFrequently: true}).drawImage(img, 0, 0, c.width, c.height);
+    let lines = await readLines(c, 0, 12);
+    if(!lines.some(l => validRun(l.text))){
+      show('busy', 'Lendo…', '', 'Realçando o relevo do vidro.');
+      lines = lines.concat(await readLines(enhance(c), 0, 12));
     }
-    return all;
+    return lines;
   }
   window.__readImage = readImage; // usado em teste
 
@@ -445,7 +558,7 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
       const t0 = performance.now();
       const lines = await readImage(img);
       judge(lines, 'foto');
-      $('hint').textContent += ' (' + ((performance.now()-t0)/1000).toFixed(1) + ' s)';
+      $('hint').textContent += ' (' + ((performance.now()-t0)/1000).toFixed(1) + ' s) · Texto visto: ' + (seen(lines) || 'nada');
     }catch(err){
       console.error(err);
       show('warn', 'Erro', '', 'Não consegui processar a foto. Tente de novo.'); beep('warn');
@@ -465,15 +578,22 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
     const g = $('guide').getBoundingClientRect();
     const gx = g.left - box.left, gy = g.top - box.top;
     const sx = (gx + offX) / scale, sy = (gy + offY) / scale, sw = g.width / scale, sh = g.height / scale;
-    const W = Math.min(960, Math.round(sw)), H = Math.round(sh * W / sw);
+    const W = Math.min(1280, Math.round(sw)), H = Math.round(sh * W / sw); // resolução cheia do recorte
     const c = document.createElement('canvas'); c.width = W; c.height = H;
-    c.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, W, H);
+    const x = c.getContext('2d', {willReadFrequently: true}); x.imageSmoothingQuality = 'high';
+    x.drawImage(video, sx, sy, sw, sh, 0, 0, W, H);
     return c;
   }
+  // Tenta a imagem normal e a realçada; começa pela que funcionou da última vez
+  let goodVariant = 0;
   async function readStrip(c){
-    const boxes = await detect(c, 640);
-    const lines = [];
-    for(const b of boxes.slice(0, 6)) lines.push(await recognize(c, b));
+    const order = goodVariant ? [1, 0] : [0, 1];
+    let lines = [];
+    for(const v of order){
+      const L = await readLines(v ? enhance(c) : c, 640, 6);
+      lines = lines.concat(L);
+      if(L.some(l => validRun(l.text))){ goodVariant = v; break; }
+    }
     return lines;
   }
   window.__readStrip = readStrip;
@@ -482,16 +602,15 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
     if(!liveOn) return;
     if(paused || !video.videoWidth || document.hidden){ setTimeout(loop, 250); return; }
     const t0 = performance.now();
+    let txt = '';
     try{
-      let lines = await readStrip(grabGuide());
-      let r = pick(lines, 'foto');
-      if(r.kind === 'none' && cfg.rotate){ // frasco de cabeça para baixo
-        const c2 = rot180(grabGuide()); lines = await readStrip(c2); r = pick(lines, 'foto');
-      }
-      step(r);
+      const lines = await readStrip(grabGuide());
+      txt = seen(lines);
+      step(pick(lines, 'foto'));
     }catch(e){ console.error(e); }
     const dt = performance.now() - t0; fps = 1000 / Math.max(1, dt);
     $('liveInfo').textContent = 'Lendo ao vivo · ' + (dt/1000).toFixed(1) + ' s por leitura';
+    $('seenTxt').textContent = txt ? 'Texto visto: ' + txt : 'Texto visto: nada';
     setTimeout(loop, 60);
   }
 
@@ -528,6 +647,12 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
     const track = stream.getVideoTracks()[0];
     const caps = track.getCapabilities ? track.getCapabilities() : {};
     $('torchBtn').hidden = !caps.torch;
+    if(caps.zoom && caps.zoom.max > caps.zoom.min){ // zoom da câmera: permite afastar o celular (foco nítido) e ampliar o número
+      const z = $('zoom'); z.min = caps.zoom.min; z.max = Math.min(caps.zoom.max, 8); z.step = caps.zoom.step || 0.1;
+      z.value = Math.min(+z.max, Math.max(+z.min, store.get('zoom', Math.min(2, +z.max))));
+      const setZ = () => { $('zoomVal').textContent = (+z.value).toFixed(1) + 'x'; track.applyConstraints({advanced:[{zoom: +z.value}]}).catch(()=>{}); store.set('zoom', +z.value); };
+      z.oninput = setZ; setZ(); $('zoomRow').hidden = false;
+    }
     if(caps.focusMode && caps.focusMode.includes('continuous')) track.applyConstraints({advanced:[{focusMode:'continuous'}]}).catch(()=>{});
     $('liveBox').hidden = false; $('shootBtn').hidden = true;
     show('idle', 'Pronto', '', 'Passe o fundo do frasco na moldura. O resultado aparece sozinho.');
