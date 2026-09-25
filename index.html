@@ -174,6 +174,7 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
         <label>Confiança mínima para dar OK (%)<input type="number" id="minconf" min="50" max="99" value="90"></label>
         <label class="check"><input type="checkbox" id="sound" checked>Som e vibração no resultado</label>
         <p class="note">Com prefixo preenchido, uma leitura que não comece com ele aparece como "Conferir", o que ajuda a pegar leitura errada ou frasco de outro molde. Se a leitura não achar um número com a quantidade de dígitos definida, o resultado é "Não lido": o app nunca dá OK sem ler o número.</p>
+        <p class="note">No plástico translúcido o começo do código (molde) costuma sair apagado. O app completa esse começo pelo prefixo do molde, desde que os últimos 3 dígitos (cavidade) sejam lidos com segurança. Se o prefixo estiver vazio, ele usa o começo comum das cavidades reprovadas cadastradas.</p>
       </div>
     </details>
   </section>
@@ -261,32 +262,67 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
     $('hint').textContent = hint || '';
   }
 
+  // Prefixo do molde usado para completar leituras: o dos ajustes ou o comum às cavidades reprovadas
+  // (sempre sobram pelo menos 3 dígitos de cavidade, que precisam ser lidos de verdade).
+  function moldPrefix(){
+    const N = cfg.digits;
+    if(cfg.prefix) return cfg.prefix.length <= N - 2 ? cfg.prefix : '';
+    const b = bad.filter(x => x.length === N);
+    if(b.length < 2) return '';
+    let p = b[0]; for(const x of b) while(p && !x.startsWith(p)) p = p.slice(0, -1);
+    return p.slice(0, Math.max(0, N - 3));
+  }
+  // Se o final do número (cavidade) foi lido e o começo bate com o molde (no máximo 1 dígito diferente), completa com o molde.
+  function fixByPrefix(run){
+    const N = cfg.digits, MP = moldPrefix(), sl = N - MP.length;
+    if(!MP || run.length < sl + 2 || run.length > N + 3) return null;
+    const pre = run.slice(0, -sl), k = Math.min(pre.length, MP.length), a = pre.slice(-k), b = MP.slice(-k);
+    let mm = 0; for(let i=0;i<k;i++) if(a[i] !== b[i]) mm++;
+    return mm <= (k >= 4 ? 1 : 0) ? { num: MP + run.slice(-sl), sl, mm } : null;
+  }
+  // Sequências de dígitos de uma linha, com a confiança de cada dígito (espaço, ponto e hífen são ignorados)
+  function runsOf(l){
+    const t = l.text, cc = l.cc || [], out = []; let s = '', c = [];
+    for(let i=0;i<=t.length;i++){
+      const ch = t[i];
+      if(ch !== undefined && ' .-'.includes(ch)) continue;
+      if(ch !== undefined && ch >= '0' && ch <= '9'){ s += ch; c.push(cc[i] != null ? cc[i] : l.conf); continue; }
+      if(s){ out.push({s, c}); s = ''; c = []; }
+    }
+    return out;
+  }
+  function runOK(run){ const N = cfg.digits; return (run.length >= N && run.length <= N + 3) || !!fixByPrefix(run); }
+
   // Analisa as linhas lidas. Retorna {kind:'bad'|'ok'|'warn'|'none', num, conf, msg}
   function pick(lines, source){
-    const N = cfg.digits, P = cfg.prefix;
+    const N = cfg.digits, P = cfg.prefix, MP = source === 'manual' ? '' : moldPrefix();
+    const avg = a => a.length ? a.reduce((x,y)=>x+y,0) / a.length : 0;
     const wins = [];
-    lines.forEach(l => {
-      (l.text.replace(/[\s.\-]/g,'').match(/\d+/g) || []).forEach(run => {
-        if(run.length < N || run.length > N + 3) return;
-        const all = [];
+    lines.forEach(l => runsOf(l).forEach(({s: run, c}) => {
+      const all = []; let primary = null, conf = avg(c), fixed = false;
+      if(run.length >= N && run.length <= N + 3){
         for(let i=0;i+N<=run.length;i++) all.push(run.slice(i, i+N));
-        let primary = null;
         if(run.length === N) primary = run;
         else if(P) primary = all.find(w => w.startsWith(P)) || null;
         else primary = run.slice(run.length - N); // símbolo à esquerda (reciclagem) vira dígito extra
-        wins.push({all, primary, conf: l.conf, raw: run});
-      });
-    });
+      }
+      if(MP && !(primary && primary.startsWith(MP))){
+        const f = fixByPrefix(run);
+        if(f){ primary = f.num; all.push(f.num); conf = avg(c.slice(-f.sl)); fixed = f.mm > 0 || run.length < N; }
+      }
+      if(all.length) wins.push({all, primary, conf, raw: run, fixed});
+    }));
     if(!wins.length) return {kind:'none', msg: source === 'manual' ? 'O número precisa ter '+N+' dígitos.' : 'Não encontrei um número de '+N+' dígitos. Aproxime, deixe o número reto e evite reflexo forte.'};
     for(const w of wins){ const hit = w.all.find(n => bad.includes(n)); if(hit) return {kind:'bad', num: hit, conf: w.conf, msg:'Cavidade da lista de reprovadas. Separe este frasco.'}; }
     const good = wins.filter(w => w.primary);
     const uniq = [...new Set(good.map(w => w.primary))];
     if(!uniq.length) return {kind:'warn', num: wins[0].raw, conf: wins[0].conf, msg:'Li '+wins[0].raw+', que não começa com '+P+'. Confira visualmente.'};
     if(uniq.length > 1) return {kind:'warn', num: uniq.join(' / '), conf: 0, msg:'Li mais de um número. Mostre só um frasco por vez.'};
-    const num = uniq[0], conf = Math.max(...good.map(w => w.conf));
+    const num = uniq[0], mine = good.filter(w => w.primary === num), conf = Math.max(...mine.map(w => w.conf));
+    const note = mine.every(w => w.fixed) ? ' Início completado pelo prefixo do molde.' : '';
     if(P && !num.startsWith(P)) return {kind:'warn', num, conf, msg:'O número lido não começa com '+P+'. Confira visualmente.'};
-    if(conf*100 < cfg.minconf) return {kind:'warn', num, conf, msg:'Leitura com confiança de '+Math.round(conf*100)+'%. Confira o número no frasco.'};
-    return {kind:'ok', num, conf, msg:'Cavidade fora da lista de reprovadas. Confiança: '+Math.round(conf*100)+'%.'};
+    if(conf*100 < cfg.minconf) return {kind:'warn', num, conf, lowconf: true, msg:'Leitura com confiança de '+Math.round(conf*100)+'%. Confira o número no frasco.'+note};
+    return {kind:'ok', num, conf, msg:'Cavidade fora da lista de reprovadas. Confiança: '+Math.round(conf*100)+'%.'+note};
   }
   function apply(r){
     const V = {bad:'Reprovado', ok:'OK', warn:'Conferir', none:'Não lido'}[r.kind];
@@ -337,7 +373,7 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
       $('engineTxt').textContent = 'Preparando leitor…';
       detS = await ort.InferenceSession.create(detB, { executionProviders: ['wasm'] });
       recS = await ort.InferenceSession.create(recB, { executionProviders: ['wasm'] });
-      $('dot').className = 'dot ready'; $('engineTxt').textContent = 'Leitor pronto (offline) · v2';
+      $('dot').className = 'dot ready'; $('engineTxt').textContent = 'Leitor pronto (offline) · v3';
       $('shootBtn').disabled = false;
       return true;
     }catch(err){
@@ -453,7 +489,7 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
     const out = await recS.run({ [recS.inputNames[0]]: t });
     const o = out[recS.outputNames[0]]; const [ , T, C] = o.dims; const D = o.data;
     const G = groups(C); const sc = new Float32Array(13); const row = new Float32Array(C);
-    let text = '', raw = '', last = -1, lastRaw = -1; const probs = [];
+    let text = '', raw = '', last = -1, lastRaw = -1; const probs = [], cc = [];
     for(let i=0;i<T;i++){
       const off = i*C; let sum = 0, bi = 0, bv = -Infinity;
       for(let j=0;j<C;j++){ const v = D[off+j]; row[j] = v; sum += v; if(v > bv){ bv = v; bi = j; } }
@@ -466,29 +502,35 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
       let bg = 0; for(let g=1;g<13;g++) if(sc[g] > sc[bg]) bg = g;
       if(bg !== 0 && bg !== last){
         if(bg <= 10){ text += String(bg - 1); probs.push(sc[bg]); } else text += bg === 11 ? ' ' : '?';
+        cc.push(sc[bg]);
       }
       last = bg;
     }
     const conf = probs.length ? probs.reduce((a,b)=>a+b,0) / probs.length : 0;
-    return { text, conf, raw };
+    return { text, conf, raw, cc };
   }
 
-  function validRun(text){ const N = cfg.digits; return (text.replace(/[\s.\-]/g,'').match(/\d+/g) || []).some(r => r.length >= N && r.length <= N+3); }
+  function validRun(text){ return runsOf({text}).some(r => runOK(r.s)); }
   function hasDigits(text){ return /\d{2}/.test(text.replace(/[\s.\-]/g,'')); }
 
-  // Realça relevo fraco: normalização local de contraste (média/desvio numa janela)
+  // Realça relevo fraco em plástico translúcido: suaviza o granulado e normaliza o contraste local (média/desvio numa janela)
   function enhance(src){
-    const w = src.width, h = src.height, r = Math.max(6, Math.round(Math.min(w, h) / 12));
-    const x0 = src.getContext('2d', {willReadFrequently: true}); const d = x0.getImageData(0, 0, w, h).data;
+    const w = src.width, h = src.height, mn = Math.min(w, h);
+    const r = Math.max(6, Math.round(mn / 20)), br = Math.max(1, Math.round(mn / 120));
+    const d = src.getContext('2d', {willReadFrequently: true}).getImageData(0, 0, w, h).data;
+    const g = new Float32Array(w*h), t = new Float32Array(w*h);
+    for(let i=0;i<w*h;i++) g[i] = (d[i*4]*77 + d[i*4+1]*150 + d[i*4+2]*29) / 256;
+    for(let y=0;y<h;y++){ let s = 0, n = 0; for(let x=-br;x<w;x++){ if(x+br<w){ s += g[y*w+x+br]; n++; } if(x-br-1>=0){ s -= g[y*w+x-br-1]; n--; } if(x>=0) t[y*w+x] = s/n; } }
+    for(let x=0;x<w;x++){ let s = 0, n = 0; for(let y=-br;y<h;y++){ if(y+br<h){ s += t[(y+br)*w+x]; n++; } if(y-br-1>=0){ s -= t[(y-br-1)*w+x]; n--; } if(y>=0) g[y*w+x] = s/n; } }
     const W1 = w + 1, S = new Float64Array(W1*(h+1)), Q = new Float64Array(W1*(h+1));
-    for(let y=0;y<h;y++){ let rs = 0, rq = 0; for(let xx=0;xx<w;xx++){ const i = (y*w+xx)*4; const g = (d[i]*77 + d[i+1]*150 + d[i+2]*29) >> 8; rs += g; rq += g*g; S[(y+1)*W1+xx+1] = S[y*W1+xx+1] + rs; Q[(y+1)*W1+xx+1] = Q[y*W1+xx+1] + rq; } }
+    for(let y=0;y<h;y++){ let rs = 0, rq = 0; for(let x=0;x<w;x++){ const v = g[y*w+x]; rs += v; rq += v*v; S[(y+1)*W1+x+1] = S[y*W1+x+1] + rs; Q[(y+1)*W1+x+1] = Q[y*W1+x+1] + rq; } }
     const c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d', {willReadFrequently: true});
     const od = x.createImageData(w, h), o = od.data;
     for(let y=0;y<h;y++){ const ya = Math.max(0, y-r), yb = Math.min(h, y+r+1);
       for(let xx=0;xx<w;xx++){ const xa = Math.max(0, xx-r), xb = Math.min(w, xx+r+1), n = (yb-ya)*(xb-xa);
-        const s = S[yb*W1+xb] - S[ya*W1+xb] - S[yb*W1+xa] + S[ya*W1+xa], q = Q[yb*W1+xb] - Q[ya*W1+xb] - Q[yb*W1+xa] + Q[ya*W1+xa];
-        const m = s/n, sd = Math.sqrt(Math.max(0, q/n - m*m)); const i = (y*w+xx)*4;
-        const g = (d[i]*77 + d[i+1]*150 + d[i+2]*29) >> 8; const v = 128 + 60 * (g - m) / (sd + 6);
+        const s1 = S[yb*W1+xb] - S[ya*W1+xb] - S[yb*W1+xa] + S[ya*W1+xa], q = Q[yb*W1+xb] - Q[ya*W1+xb] - Q[yb*W1+xa] + Q[ya*W1+xa];
+        const m = s1/n, sd = Math.sqrt(Math.max(0, q/n - m*m)), i = (y*w+xx)*4;
+        const v = 128 + 60 * (g[y*w+xx] - m) / (sd + 10);
         o[i] = o[i+1] = o[i+2] = v < 0 ? 0 : v > 255 ? 255 : v; o[i+3] = 255; } }
     x.putImageData(od, 0, 0); return c;
   }
@@ -502,7 +544,7 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
     ds.forEach(it => { it.u = it.b.cx*ca + it.b.cy*sa; it.v = -it.b.cx*sa + it.b.cy*ca; if(it.flip) { it.u = -it.u; } });
     ds.sort((p, q) => p.u - q.u);
     let chain = [ds[0]];
-    const flush = () => { if(chain.length > 1){ const text = chain.map(c => c.text).join(''); out.push({ text, conf: Math.min(...chain.map(c => c.conf)), raw: chain.map(c => c.raw).join(' ') }); } };
+    const flush = () => { if(chain.length > 1){ const text = chain.map(c => c.text).join(''); out.push({ text, conf: Math.min(...chain.map(c => c.conf)), raw: chain.map(c => c.raw).join(' '), cc: [].concat(...chain.map(c => c.cc || [])) }); } };
     for(let i=1;i<ds.length;i++){
       const p = chain[chain.length-1], q = ds[i], hh = (p.b.h + q.b.h) / 2;
       const gap = (q.u - q.b.w/2) - (p.u + p.b.w/2);
@@ -516,16 +558,18 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
   // Lê um recorte: detecta, lê cada caixa (girando 180° se não achar número) e junta pedaços.
   async function readLines(src, maxW, maxBoxes){
     const boxes = (await detect(src, maxW)).slice(0, maxBoxes);
-    const items = [];
+    const items = [], MP = moldPrefix(), top = MP ? 2 : 1;
+    // Nota da leitura: 1 = achou número válido, 2 = número bate com o molde; mais a confiança
+    const quality = r => { let q = 0; for(const {s} of runsOf(r)){ if(runOK(s)) q = Math.max(q, 1); if(MP && (s.includes(MP) || fixByPrefix(s))) q = 2; } return q + r.conf; };
     for(const b of boxes){
       let best = null;
       for(const flip of cfg.rotate ? [false, true] : [false]){
         for(const enh of [true, false]){
-          const r = await recognize(src, b, flip, enh); r.b = b; r.flip = flip;
-          if(!best || (validRun(r.text) && !validRun(best.text)) || (validRun(r.text) === validRun(best.text) && r.conf > best.conf)) best = r;
-          if(validRun(r.text) && r.conf > 0.9) break;
+          const r = await recognize(src, b, flip, enh); r.b = b; r.flip = flip; r.q = quality(r);
+          if(!best || r.q > best.q) best = r;
+          if(r.q >= top + 0.85) break;
         }
-        if(validRun(best.text) && best.conf > 0.9) break;
+        if(best.q >= top + 0.85) break; // leitura boa nesta posição: não precisa girar
       }
       items.push(best);
     }
@@ -539,7 +583,7 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
     c.getContext('2d', {willReadFrequently: true}).drawImage(img, 0, 0, c.width, c.height);
     let lines = await readLines(c, 0, 12);
     if(!lines.some(l => validRun(l.text))){
-      show('busy', 'Lendo…', '', 'Realçando o relevo do vidro.');
+      show('busy', 'Lendo…', '', 'Realçando o relevo do frasco.');
       lines = lines.concat(await readLines(enhance(c), 0, 12));
     }
     return lines;
@@ -568,7 +612,7 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
   // ================= Modo vídeo (câmera sempre aberta) =================
   const video = $('video');
   let stream = null, torchOn = false, paused = false;
-  let lastSeen = '', streak = 0, lastJudged = '', armed = true, noneCount = 0, presentSince = 0, warned = false, fps = 0;
+  let lastJudged = '', armed = true, noneCount = 0, presentSince = 0, warned = false, fps = 0;
 
   function grabGuide(){
     const vw = video.videoWidth, vh = video.videoHeight;
@@ -614,25 +658,33 @@ details[open] .card-body{margin-top:12px;display:flex;flex-direction:column;gap:
     setTimeout(loop, 60);
   }
 
+  // Decide pelo que se repete nas últimas leituras (não precisa ser seguido): 2 iguais para OK/Reprovado,
+  // ou 3 iguais quando cada uma sozinha ficou abaixo da confiança mínima.
+  let recent = [];
   function step(r){
     const now = performance.now();
     if(r.kind === 'none'){
       noneCount++;
-      if(noneCount >= 2){ armed = true; streak = 0; lastSeen = ''; presentSince = 0; warned = false; $('camBox').className = 'cam'; if(noneCount === 2){ $('vbadge').className = 'vbadge'; $('vbadge').textContent = 'Aguardando frasco'; } }
+      if(noneCount >= 2){ armed = true; recent = []; presentSince = 0; warned = false; $('camBox').className = 'cam'; if(noneCount === 2){ $('vbadge').className = 'vbadge'; $('vbadge').textContent = 'Aguardando frasco'; } }
       return;
     }
     noneCount = 0;
     if(!presentSince) presentSince = now;
-    const key = r.kind + ':' + r.num;
-    if(key === lastSeen) streak++; else { lastSeen = key; streak = 1; }
-    const fresh = armed || r.num !== lastJudged;
-    if(!fresh) return;
-    // Decide com 2 leituras iguais seguidas. Reprovado e OK decidem; "Conferir" só depois de 3 s sem decisão.
-    if(streak >= 2 && (r.kind === 'bad' || r.kind === 'ok')){
-      apply(r); lastJudged = r.num; armed = false; warned = false;
-      $('camBox').className = 'cam ' + r.kind; return;
+    recent.push(r); if(recent.length > 5) recent.shift();
+    const cnt = (num, f) => recent.filter(x => x.num === num && f(x)).length;
+    const weak = x => x.kind === 'ok' || (x.lowconf && x.conf >= 0.6);
+    let dec = recent.find(x => x.kind === 'bad' && cnt(x.num, y => y.kind === 'bad') >= 2) || null;
+    if(!dec && r.kind === 'ok' && cnt(r.num, y => y.kind === 'ok') >= 2) dec = r;
+    if(!dec && weak(r)){
+      const n = cnt(r.num, weak);
+      if(n >= 3) dec = Object.assign({}, r, {kind:'ok', msg:'Cavidade fora da lista de reprovadas. Mesmo número em '+n+' leituras.'});
     }
-    if(r.kind === 'warn' && !warned && now - presentSince > 3000){
+    if(dec){
+      if(!armed && dec.num === lastJudged) return;
+      apply(dec); lastJudged = dec.num; armed = false; warned = false;
+      $('camBox').className = 'cam ' + dec.kind; return;
+    }
+    if(r.kind === 'warn' && (armed || r.num !== lastJudged) && !warned && now - presentSince > 3000){
       apply(r); warned = true; $('camBox').className = 'cam warn';
     }
   }
